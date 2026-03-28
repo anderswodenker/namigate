@@ -1,0 +1,18 @@
+[
+  {
+    "alias": "MyServer",
+    "hostname": "192.168.1.10",
+    "user": "myuser",
+    "port": 22,
+    "location": "Home",
+    "description": "My home server"
+  },
+  {
+    "alias": "WebServer",
+    "hostname": "example.com",
+    "user": "deploy",
+    "port": 22,
+    "location": "Cloud",
+    "description": "Production web server"
+  }
+]
