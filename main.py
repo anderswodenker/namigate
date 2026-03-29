@@ -1,9 +1,9 @@
 import json
-import os
 import subprocess
 from pathlib import Path
 from textual.app import App, ComposeResult
-from textual.widgets import Footer, Header, DataTable
+from textual.binding import Binding
+from textual.widgets import Footer, Header, DataTable, Input
 from textual.containers import Container
 
 CONNECTIONS_FILE = Path(__file__).parent / "connections.json"
@@ -13,7 +13,6 @@ class SSHConnectionTable(DataTable):
     def on_mount(self) -> None:
         self.cursor_type = "row"
         self.zebra_stripes = True
-
         self.add_column("Alias", key="alias")
         self.add_column("Hostname", key="hostname")
         self.add_column("User", key="user")
@@ -57,6 +56,18 @@ class ListSSH(App):
         color: #DCD7BA;
     }
 
+    Input {
+        background: #2A2A37;
+        color: #DCD7BA;
+        border: tall #54546D;
+        margin: 0 1;
+        height: 3;
+    }
+
+    Input:focus {
+        border: tall #7E9CD8;
+    }
+
     DataTable {
         background: #1F1F28;
         color: #DCD7BA;
@@ -93,18 +104,27 @@ class ListSSH(App):
     }
     """
 
-    BINDINGS = [("h", "helping", "Help")]
+    BINDINGS = [
+        Binding("q", "quit", "Quit"),
+        Binding("slash", "focus_search", "Search"),
+        Binding("c", "copy_command", "Copy cmd"),
+        Binding("escape", "action_escape", "Clear / Quit", show=False),
+        Binding("h", "helping", "Help"),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._connections: list[dict] = []
+        self._highlighted_row_key = None
 
     def on_mount(self) -> None:
         self.load_connections()
+        self.query_one(SSHConnectionTable).focus()
 
     def load_connections(self) -> None:
-        table = self.query_one(SSHConnectionTable)
-        table.clear()
-
         if not CONNECTIONS_FILE.exists():
             self.notify(
-                f"connections.json not found. Copy connections.sample.json to get started.",
+                "connections.json not found. Copy connections.sample.json to get started.",
                 severity="error",
                 timeout=10,
             )
@@ -112,12 +132,24 @@ class ListSSH(App):
 
         try:
             with open(CONNECTIONS_FILE) as f:
-                connections = json.load(f)
+                self._connections = json.load(f)
         except json.JSONDecodeError as e:
             self.notify(f"Invalid JSON in connections.json: {e}", severity="error", timeout=10)
             return
 
-        for conn in connections:
+        self._apply_filter("")
+
+    def _apply_filter(self, query: str) -> None:
+        table = self.query_one(SSHConnectionTable)
+        table.clear()
+
+        q = query.lower()
+        filtered = (
+            [c for c in self._connections if any(q in str(v).lower() for v in c.values())]
+            if q else self._connections
+        )
+
+        for conn in filtered:
             table.add_row(
                 conn["alias"],
                 conn["hostname"],
@@ -127,28 +159,86 @@ class ListSSH(App):
                 conn.get("description", "N/A"),
             )
 
+        total = len(self._connections)
+        n = len(filtered)
+        self.sub_title = f"{n} of {total} connections" if q else f"{total} connections"
+
     def compose(self) -> ComposeResult:
-        """Create child widgets for the app."""
         yield Header()
+        yield Input(placeholder="Filter connections… (press / to focus)", id="search")
         with Container(id="table-container"):
             yield SSHConnectionTable()
         yield Footer()
 
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "search":
+            self._apply_filter(event.value)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "search":
+            self.query_one(SSHConnectionTable).focus()
+
+    def action_focus_search(self) -> None:
+        self.query_one("#search", Input).focus()
+
+    def action_escape(self) -> None:
+        search = self.query_one("#search", Input)
+        if search.value:
+            search.value = ""
+            self.query_one(SSHConnectionTable).focus()
+        else:
+            self.exit()
+
     def action_helping(self) -> None:
-        self.notify("Navigate with ↑/↓, press Enter to connect, q to quit.")
+        self.notify("↑/↓ navigate · Enter connect · / search · c copy · q quit")
+
+    def _build_ssh_command(self, row) -> list[str]:
+        user, hostname, port = row[2], row[1], row[3]
+        cmd = ["ssh", f"{user}@{hostname}"]
+        if port != "22":
+            cmd += ["-p", port]
+        return cmd
+
+    def action_copy_command(self) -> None:
+        if self._highlighted_row_key is None:
+            return
+        table = self.query_one(SSHConnectionTable)
+        try:
+            row = table.get_row(self._highlighted_row_key)
+        except Exception:
+            return
+
+        cmd_str = " ".join(self._build_ssh_command(row))
+
+        copied = False
+        for args in [
+            ["xclip", "-selection", "clipboard"],
+            ["xsel", "--clipboard", "--input"],
+            ["pbcopy"],
+        ]:
+            try:
+                subprocess.run(args, input=cmd_str.encode(), check=True, capture_output=True)
+                copied = True
+                break
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                continue
+
+        if copied:
+            self.notify(f"Copied: {cmd_str}")
+        else:
+            self.notify(f"[bold]{cmd_str}[/bold]", title="SSH command", timeout=8)
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Called when user presses Enter on a row."""
         row = event.data_table.get_row(event.row_key)
-        hostname = row[1]
-        user = row[2]
-        self.exit(("ssh", f"{user}@{hostname}"))
+        self.exit(tuple(self._build_ssh_command(row)))
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         """Called when user navigates to a row with arrow keys."""
         if event.row_key is not None:
+            self._highlighted_row_key = event.row_key
             row = event.data_table.get_row(event.row_key)
-            self.sub_title = f"Highlighted: {row[0]}"
+            self.sub_title = f"{row[0]} — {row[2]}@{row[1]}"
 
 
 if __name__ == "__main__":
