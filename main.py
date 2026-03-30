@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import subprocess
 from pathlib import Path
 from textual.app import App, ComposeResult
@@ -134,21 +135,31 @@ class ListSSH(App):
 
     async def _git_pull(self) -> str | None:
         """Run git pull --rebase. Returns stdout on success, None on failure."""
+        env = os.environ.copy()
+        # Prevent SSH from prompting for a passphrase inside the TUI — fail fast instead.
+        env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+        env["GIT_TERMINAL_PROMPT"] = "0"
+
         try:
             proc = await asyncio.create_subprocess_exec(
                 "git", "pull", "--rebase",
                 cwd=CONNECTIONS_FILE.parent,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=env,
             )
             stdout, stderr = await proc.communicate()
             if proc.returncode == 0:
                 return stdout.decode().strip()
-            self.notify(
-                f"Git sync failed: {stderr.decode().strip()}",
-                severity="warning",
-                timeout=6,
-            )
+            error = stderr.decode().strip()
+            if "Permission denied" in error or "Could not read" in error:
+                self.notify(
+                    "SSH key not loaded — run [bold]ssh-add[/bold] before launching.",
+                    severity="warning",
+                    timeout=8,
+                )
+            else:
+                self.notify(f"Git sync failed: {error}", severity="warning", timeout=6)
             return None
         except FileNotFoundError:
             self.notify("git not found in PATH", severity="error")
