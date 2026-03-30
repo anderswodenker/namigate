@@ -1,3 +1,4 @@
+import asyncio
 import json
 import subprocess
 from pathlib import Path
@@ -6,7 +7,16 @@ from textual.binding import Binding
 from textual.widgets import Footer, Header, DataTable, Input
 from textual.containers import Container
 
-CONNECTIONS_FILE = Path(__file__).parent / "connections.json"
+CONNECTIONS_FILE = Path.home() / ".config" / "namigate" / "connections.json"
+
+
+def _is_git_repo() -> bool:
+    path = CONNECTIONS_FILE.parent
+    while path != path.parent:
+        if (path / ".git").exists():
+            return True
+        path = path.parent
+    return False
 
 
 class SSHConnectionTable(DataTable):
@@ -108,6 +118,7 @@ class ListSSH(App):
         Binding("q", "quit", "Quit"),
         Binding("slash", "focus_search", "Search"),
         Binding("c", "copy_command", "Copy cmd"),
+        Binding("ctrl+r", "sync", "Sync"),
         Binding("escape", "action_escape", "Clear / Quit", show=False),
         Binding("h", "helping", "Help"),
     ]
@@ -117,9 +128,50 @@ class ListSSH(App):
         self._connections: list[dict] = []
         self._highlighted_row_key = None
 
-    def on_mount(self) -> None:
-        self.load_connections()
+    async def on_mount(self) -> None:
+        await self._sync_and_reload(notify_up_to_date=False)
         self.query_one(SSHConnectionTable).focus()
+
+    async def _git_pull(self) -> str | None:
+        """Run git pull --rebase. Returns stdout on success, None on failure."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git", "pull", "--rebase",
+                cwd=CONNECTIONS_FILE.parent,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode == 0:
+                return stdout.decode().strip()
+            self.notify(
+                f"Git sync failed: {stderr.decode().strip()}",
+                severity="warning",
+                timeout=6,
+            )
+            return None
+        except FileNotFoundError:
+            self.notify("git not found in PATH", severity="error")
+            return None
+
+    async def _sync_and_reload(self, notify_up_to_date: bool = True) -> None:
+        if not _is_git_repo():
+            self.load_connections()
+            return
+
+        output = await self._git_pull()
+        if output is None:
+            # Pull failed — still load whatever is on disk
+            self.load_connections()
+            return
+
+        if "Already up to date" in output:
+            if notify_up_to_date:
+                self.notify("Already up to date.")
+        else:
+            self.notify(f"Synced: {output}", timeout=4)
+
+        self.load_connections()
 
     def load_connections(self) -> None:
         if not CONNECTIONS_FILE.exists():
@@ -137,7 +189,7 @@ class ListSSH(App):
             self.notify(f"Invalid JSON in connections.json: {e}", severity="error", timeout=10)
             return
 
-        self._apply_filter("")
+        self._apply_filter(self.query_one("#search", Input).value)
 
     def _apply_filter(self, query: str) -> None:
         table = self.query_one(SSHConnectionTable)
@@ -189,8 +241,11 @@ class ListSSH(App):
         else:
             self.exit()
 
+    async def action_sync(self) -> None:
+        await self._sync_and_reload(notify_up_to_date=True)
+
     def action_helping(self) -> None:
-        self.notify("↑/↓ navigate · Enter connect · / search · c copy · q quit")
+        self.notify("↑/↓ navigate · Enter connect · / search · c copy · ctrl+r sync · q quit")
 
     def _build_ssh_command(self, row) -> list[str]:
         user, hostname, port = row[2], row[1], row[3]

@@ -4,8 +4,13 @@ set -e
 INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="$HOME/.local/bin"
 LAUNCHER="$BIN_DIR/server"
+CONNECTIONS_DIR="$HOME/.config/namigate"
 
-echo "Setting up ssh_list..."
+# Optional: pass your private connections repo as the first argument
+# Example: ./install.sh git@github.com:you/your-connections-repo.git
+CONNECTIONS_REPO="${1:-}"
+
+echo "Setting up namigate..."
 
 # Create venv if it doesn't exist
 if [ ! -d "$INSTALL_DIR/venv" ]; then
@@ -17,11 +22,22 @@ fi
 echo "Installing dependencies..."
 "$INSTALL_DIR/venv/bin/pip" install -q -r "$INSTALL_DIR/requirements.txt"
 
-# Copy sample connections if no connections.json exists
-if [ ! -f "$INSTALL_DIR/connections.json" ]; then
-    echo "Creating connections.json from sample..."
-    cp "$INSTALL_DIR/connections.sample.json" "$INSTALL_DIR/connections.json"
-    echo "  -> Edit $INSTALL_DIR/connections.json to add your hosts."
+# Set up connections
+if [ -d "$CONNECTIONS_DIR/.git" ]; then
+    echo "Connections repo already set up at $CONNECTIONS_DIR."
+elif [ -n "$CONNECTIONS_REPO" ]; then
+    echo "Cloning connections repo to $CONNECTIONS_DIR..."
+    mkdir -p "$(dirname "$CONNECTIONS_DIR")"
+    git clone --branch master "$CONNECTIONS_REPO" "$CONNECTIONS_DIR"
+    echo "  -> Edit $CONNECTIONS_DIR/connections.json to add your hosts."
+else
+    echo "No connections repo provided — creating local connections.json..."
+    mkdir -p "$CONNECTIONS_DIR"
+    if [ ! -f "$CONNECTIONS_DIR/connections.json" ]; then
+        cp "$INSTALL_DIR/connections.sample.json" "$CONNECTIONS_DIR/connections.json"
+        echo "  -> Edit $CONNECTIONS_DIR/connections.json to add your hosts."
+        echo "  -> To enable cloud sync later, run: ./install.sh git@github.com:you/your-repo.git"
+    fi
 fi
 
 # Create ~/.local/bin if needed

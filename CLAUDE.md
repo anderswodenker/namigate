@@ -9,13 +9,15 @@
 ```
 ssh_list/
 ├── main.py                   # Main application
-├── connections.json          # SSH connection definitions (gitignored)
 ├── connections.sample.json   # Sample connection file for new users
 ├── install.sh                # Installs launcher to ~/.local/bin/server
 ├── requirements.txt          # Python dependencies (textual>=0.48.0)
 ├── .python-version           # Minimum Python version (3.8)
 ├── venv/                     # Virtual environment (gitignored)
 └── CLAUDE.md
+
+~/.config/namigate/           # Created by install.sh; optionally a private git repo for sync
+└── connections.json          # SSH connection definitions
 ```
 
 ## Running the App
@@ -36,7 +38,9 @@ python main.py
 
 ## Connections
 
-Connections are stored in `connections.json` as a JSON array. Each entry has: `alias`, `hostname`, `user`, `port`, `location`, `description`.
+Connections are stored in `~/.config/namigate/connections.json` as a JSON array. Each entry has: `alias`, `hostname`, `user`, `port`, `location`, `description`.
+
+The file is stored outside the app repo so it can optionally live in its own private git repo for cross-device sync. The app pulls on every launch and on `ctrl+r` if the directory is a git repo.
 
 ## Dependencies
 
